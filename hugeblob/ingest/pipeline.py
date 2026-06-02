@@ -78,6 +78,7 @@ def ingest_files(
     embedder: "Embedder",  # noqa: F821
     books_dir: Path | None = None,
     force: bool = False,
+    limit: int | None = None,
     log: Callable[[str], None] = print,
 ) -> int:
     directory = (books_dir or settings.books_dir).expanduser()
@@ -92,18 +93,34 @@ def ingest_files(
     apple_books = load_apple_books_metadata()
     meta_index = _build_metadata_index(apple_books)
 
-    files = sorted(
+    all_files = sorted(
         [p for p in directory.rglob("*") if p.suffix.lower() in (".epub", ".pdf")]
     )
-    log(f"Found {len(files)} files in {directory}")
+
+    # Filter to only unprocessed files before applying the limit so --limit
+    # always means "N new books", not "N books scanned".
+    pending = [
+        p for p in all_files
+        if force
+        or str(p) not in ingested
+        or ingested[str(p)].get("mtime") != str(p.stat().st_mtime)
+    ]
+
+    total_remaining = len(pending)
+    if limit is not None:
+        pending = pending[:limit]
+
+    log(
+        f"Found {len(all_files)} files in {directory} "
+        f"({total_remaining} unprocessed"
+        + (f", processing next {len(pending)}" if limit is not None else "")
+        + ")"
+    )
 
     total_new = 0
-    for path in tqdm(files, desc="Indexing books", unit="book"):
+    for path in tqdm(pending, desc="Indexing books", unit="book"):
         key = str(path)
         mtime = str(path.stat().st_mtime)
-
-        if not force and key in ingested and ingested[key].get("mtime") == mtime:
-            continue
 
         metadata = meta_index.get(path.stem.lower())
 
@@ -128,7 +145,11 @@ def ingest_files(
     state["ingested_files"] = ingested
     _save_state(settings.state_file, state)
 
-    log(f"Ingested {total_new} new/changed files.")
+    still_pending = total_remaining - total_new
+    msg = f"Ingested {total_new} files."
+    if limit is not None and still_pending > 0:
+        msg += f" {still_pending} files remaining — run again to continue."
+    log(msg)
     return total_new
 
 

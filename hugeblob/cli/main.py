@@ -48,6 +48,10 @@ def ingest(
         help="Override the BOOKS_DIR setting for this run.",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Re-ingest already processed files."),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", "-l",
+        help="Max number of new files to process per run. Re-run to continue.",
+    ),
 ):
     """Ingest your library into the vector store."""
     from hugeblob.config import get_settings
@@ -65,7 +69,7 @@ def ingest(
         ingest_readwise(settings, store, embedder, log=log)
 
     if source in ("all", "files"):
-        ingest_files(settings, store, embedder, books_dir=books_dir, force=force, log=log)
+        ingest_files(settings, store, embedder, books_dir=books_dir, force=force, limit=limit, log=log)
 
     console.print(f"\n[green]Done.[/green] Total indexed chunks: {store.count()}")
 
