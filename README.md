@@ -75,6 +75,36 @@ hugeblob synthesize "how do different authors approach the concept of emergence?
 hugeblob stats
 ```
 
+## Multiple libraries (collections)
+
+Keep separate libraries fully isolated — e.g. cookbooks apart from everything
+else — using **collections**. Each collection is an independent index: queries
+never cross over, and each tracks its own ingestion state.
+
+Pass `--collection` (`-c`) to any command. For ingest, point `--books-dir` at
+that library's folder:
+
+```bash
+# Build a cookbooks collection (no Readwise highlights — files only)
+hugeblob ingest -c cookbooks --source files --books-dir ~/Cookbooks --limit 500
+
+# Build your main library (the default collection is "library")
+hugeblob ingest --source all --books-dir ~/Books --limit 500
+
+# Query one or the other
+hugeblob search "what can I braise in a dutch oven?" -c cookbooks
+hugeblob chat -c cookbooks
+hugeblob chat                      # main library (default collection)
+hugeblob stats -c cookbooks
+```
+
+Notes:
+- Collections are created on first ingest — no setup step needed.
+- A collection's docs all share one embedding dimension, so don't switch
+  embedding providers mid-collection (see [Embedding providers](#embedding-providers)).
+- Skipping `--source readwise` (as above) means no highlights are pulled —
+  ideal for cookbooks.
+
 ## MCP server (Claude Desktop)
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -101,6 +131,28 @@ Then in Claude Desktop you can say:
 - *"What do my highlights say about habit formation?"*
 - *"Synthesize how the books in my library approach the question of consciousness"*
 - *"List all my 5-star books in the philosophy genre"*
+
+### Multiple collections in Claude Desktop
+
+To query separate libraries from Claude Desktop, register one MCP server per
+collection — each just sets a different `QDRANT_COLLECTION`:
+
+```json
+{
+  "mcpServers": {
+    "hugeblob": {
+      "command": "hugeblob-mcp",
+      "env": { "QDRANT_COLLECTION": "library", "OPENAI_API_KEY": "sk-...", "ANTHROPIC_API_KEY": "sk-ant-..." }
+    },
+    "hugeblob-cookbooks": {
+      "command": "hugeblob-mcp",
+      "env": { "QDRANT_COLLECTION": "cookbooks", "OPENAI_API_KEY": "sk-...", "ANTHROPIC_API_KEY": "sk-ant-..." }
+    }
+  }
+}
+```
+
+Claude will see both tool sets and you can ask it to search whichever one you mean.
 
 ### MCP tools
 

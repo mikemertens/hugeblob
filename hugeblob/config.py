@@ -53,7 +53,8 @@ class Settings(BaseSettings):
 
     @property
     def state_file(self) -> Path:
-        return self.data_dir / "state.json"
+        # Per-collection so separate libraries track ingestion independently.
+        return self.data_dir / f"state-{self.qdrant_collection}.json"
 
 
 _settings: Settings | None = None

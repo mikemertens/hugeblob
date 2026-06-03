@@ -19,14 +19,23 @@ app = typer.Typer(
 console = Console()
 
 
-def _get_deps():
+def _resolve_settings(collection: Optional[str] = None):
+    """Load settings, optionally overriding the active collection."""
+    from hugeblob.config import get_settings
+
+    settings = get_settings()
+    if collection:
+        settings.qdrant_collection = collection
+    return settings
+
+
+def _get_deps(collection: Optional[str] = None):
     """Lazy-load heavy dependencies so --help is instant."""
     import anthropic
-    from hugeblob.config import get_settings
     from hugeblob.embed.embedder import embedder_from_settings
     from hugeblob.store.qdrant_store import store_from_settings
 
-    settings = get_settings()
+    settings = _resolve_settings(collection)
     embedder = embedder_from_settings(settings)
     store = store_from_settings(settings)
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -52,17 +61,21 @@ def ingest(
         None, "--limit", "-l",
         help="Max number of new files to process per run. Re-run to continue.",
     ),
+    collection: Optional[str] = typer.Option(
+        None, "--collection", "-c",
+        help="Target collection (separate library). Defaults to QDRANT_COLLECTION.",
+    ),
 ):
     """Ingest your library into the vector store."""
-    from hugeblob.config import get_settings
     from hugeblob.embed.embedder import embedder_from_settings
     from hugeblob.store.qdrant_store import store_from_settings
     from hugeblob.ingest.pipeline import ingest_readwise, ingest_files
 
-    settings = get_settings()
+    settings = _resolve_settings(collection)
     embedder = embedder_from_settings(settings)
     store = store_from_settings(settings)
 
+    console.print(f"[dim]Collection: {settings.qdrant_collection}[/dim]")
     log = lambda msg: console.print(f"  {msg}")
 
     if source in ("all", "readwise"):
@@ -86,11 +99,14 @@ def search(
     author: Optional[str] = typer.Option(None, "--author", "-a", help="Filter by author"),
     genre: Optional[str] = typer.Option(None, "--genre", "-g", help="Filter by genre"),
     min_rating: Optional[int] = typer.Option(None, "--min-rating", "-r", help="Minimum rating (1-5)"),
+    collection: Optional[str] = typer.Option(
+        None, "--collection", "-c", help="Collection to search. Defaults to QDRANT_COLLECTION.",
+    ),
 ):
     """Semantic search across your library."""
     from hugeblob.query.search import search as do_search
 
-    settings, embedder, store, _ = _get_deps()
+    settings, embedder, store, _ = _get_deps(collection)
     results = do_search(
         query,
         store,
@@ -132,16 +148,19 @@ def search(
 def chat(
     book: Optional[str] = typer.Option(None, "--book", "-b", help="Focus chat on a specific book title."),
     highlights_only: bool = typer.Option(False, "--highlights", "-H", help="Pull from highlights only."),
+    collection: Optional[str] = typer.Option(
+        None, "--collection", "-c", help="Collection to chat with. Defaults to QDRANT_COLLECTION.",
+    ),
 ):
     """Interactive chat session grounded in your library."""
     from hugeblob.query.search import search as do_search
     from hugeblob.query.llm import ask, ConversationHistory
 
-    settings, embedder, store, client = _get_deps()
+    settings, embedder, store, client = _get_deps(collection)
     history = ConversationHistory()
 
     console.print(Panel(
-        "[bold]hugeblob chat[/bold]\n"
+        f"[bold]hugeblob chat[/bold]  [dim](collection: {settings.qdrant_collection})[/dim]\n"
         "Ask anything about your library. Type [bold]exit[/bold] or Ctrl-C to quit.\n"
         "[dim]/clear[/dim] resets conversation history.",
         border_style="blue",
@@ -199,12 +218,15 @@ def chat(
 def synthesize(
     topic: str = typer.Argument(..., help="Topic to synthesize across your library."),
     limit: int = typer.Option(12, "--limit", "-n", help="Number of passages to gather."),
+    collection: Optional[str] = typer.Option(
+        None, "--collection", "-c", help="Collection to synthesize from. Defaults to QDRANT_COLLECTION.",
+    ),
 ):
     """Cross-book synthesis: find themes and connections on a topic."""
     from hugeblob.query.search import search as do_search
     from hugeblob.query.llm import synthesize as do_synthesize
 
-    settings, embedder, store, client = _get_deps()
+    settings, embedder, store, client = _get_deps(collection)
 
     console.print(f"[dim]Gathering passages about: {topic}...[/dim]")
     results = do_search(topic, store, embedder, limit=limit)
@@ -227,13 +249,16 @@ def synthesize(
 # ---------------------------------------------------------------------------
 
 @app.command()
-def stats():
+def stats(
+    collection: Optional[str] = typer.Option(
+        None, "--collection", "-c", help="Collection to report on. Defaults to QDRANT_COLLECTION.",
+    ),
+):
     """Show library statistics."""
-    from hugeblob.config import get_settings
     from hugeblob.store.qdrant_store import store_from_settings
     import json
 
-    settings = get_settings()
+    settings = _resolve_settings(collection)
     store = store_from_settings(settings)
 
     total = store.count()
@@ -244,6 +269,7 @@ def stats():
     table = Table(title="Library Stats", show_header=False, border_style="dim")
     table.add_column("Metric", style="bold")
     table.add_column("Value")
+    table.add_row("Collection", settings.qdrant_collection)
     table.add_row("Total indexed chunks", str(total))
     table.add_row("Ingested files", str(len(state.get("ingested_files", {}))))
     table.add_row("Last Readwise sync", state.get("readwise_last_sync") or "never")
