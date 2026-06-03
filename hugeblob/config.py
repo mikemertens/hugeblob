@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     readwise_api_key: str = ""
+    voyage_api_key: str = ""
 
     # Paths
     books_dir: Path = Path.home() / "Books"
@@ -24,11 +25,16 @@ class Settings(BaseSettings):
     qdrant_collection: str = "library"
 
     # Embeddings
-    embedding_provider: Literal["openai", "ollama"] = "openai"
+    embedding_provider: Literal["openai", "voyage", "ollama"] = "openai"
     embedding_model_openai: str = "text-embedding-3-small"
+    embedding_model_voyage: str = "voyage-3"
     embedding_model_ollama: str = "nomic-embed-text"
     ollama_base_url: str = "http://localhost:11434"
-    embedding_dim: int = 1536  # text-embedding-3-small; set 768 for nomic-embed-text
+    # Must match the provider/model below — the collection is created with this size.
+    #   openai text-embedding-3-small = 1536
+    #   voyage voyage-3 = 1024   (voyage-3-lite = 512)
+    #   ollama nomic-embed-text = 768
+    embedding_dim: int = 1536
 
     # Claude
     claude_model: str = "claude-sonnet-4-6"

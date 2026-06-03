@@ -40,7 +40,7 @@ cp .env.example .env
 
 Minimum required keys:
 - `ANTHROPIC_API_KEY` — for Claude Q&A
-- `OPENAI_API_KEY` — for embeddings (or set `EMBEDDING_PROVIDER=ollama`)
+- `OPENAI_API_KEY` — for embeddings (default; or use Voyage / Ollama — see [Embedding providers](#embedding-providers))
 - `READWISE_API_KEY` — for highlights (optional but recommended)
 - `BOOKS_DIR` — path to your EPUB/PDF folder
 
@@ -126,25 +126,55 @@ EPUB / PDF files       ──┘    (embed w/ OpenAI          │
                                               CLI (typer + rich)   MCP server
 ```
 
-## Embedding costs
+## Embedding providers
 
-At `text-embedding-3-small` ($0.02/1M tokens):
+Claude has no embeddings API, so the vectorization step uses a separate
+provider. Three are supported — pick one with `EMBEDDING_PROVIDER`:
 
-| Scale | Estimated cost |
-|-------|----------------|
-| Highlights only (~50k highlights) | < $0.01 |
-| 500 books | ~$1 |
-| 2,000 books | ~$4 |
+| Provider | Model | Dim | Cost / 1M tok | Notes |
+|----------|-------|-----|---------------|-------|
+| `openai` (default) | text-embedding-3-small | 1536 | $0.02 | Reliable, widely used |
+| `voyage` | voyage-3 | 1024 | $0.06 | Anthropic-invested; stronger retrieval quality; uses document/query input types |
+| `ollama` | nomic-embed-text | 768 | free | Fully local, nothing leaves your machine |
 
-This is a one-time cost. Incremental re-ingestion only processes changed files.
+**Switching providers requires three coordinated changes** — `EMBEDDING_PROVIDER`,
+the matching `EMBEDDING_DIM` (see table), and a fresh Qdrant collection
+(set a new `QDRANT_COLLECTION` or wipe the volume), since you cannot mix
+vector dimensions in one collection. After switching, re-ingest.
 
-## Local embeddings
+### Voyage AI
 
-Set `EMBEDDING_PROVIDER=ollama` and run:
+```bash
+# .env
+EMBEDDING_PROVIDER=voyage
+VOYAGE_API_KEY=pa-...
+EMBEDDING_DIM=1024
+```
+
+Voyage embeds passages and search queries differently (`input_type` of
+`document` vs `query`) for better retrieval — hugeblob sets this automatically.
+
+### Ollama (local)
 
 ```bash
 ollama pull nomic-embed-text
 ```
 
-Set `EMBEDDING_DIM=768` in `.env` to match nomic-embed-text's output dimension.
-Note: you cannot mix embedding providers in the same Qdrant collection.
+```bash
+# .env
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_DIM=768
+```
+
+## Embedding costs (one-time)
+
+At OpenAI `text-embedding-3-small` ($0.02/1M tokens):
+
+| Scale | OpenAI | Voyage voyage-3 |
+|-------|--------|-----------------|
+| Highlights only (~50k highlights) | < $0.01 | ~$0.03 |
+| 500 books | ~$1 | ~$3 |
+| 2,000 books | ~$4 | ~$12 |
+
+This is a one-time cost. Incremental re-ingestion only processes changed files.
+Ollama is free at any scale (compute is local).
