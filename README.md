@@ -47,56 +47,90 @@ Minimum required keys:
 ### 4. Ingest
 
 ```bash
-# Fast start: highlights + metadata only
+# Check that your Apple Books library is found first
+hugeblob doctor
+
+# Fast start: highlights only
 hugeblob ingest --source readwise
 
-# Full library (runs in background, takes a while for 2k books)
-hugeblob ingest --source files
+# Read the Apple Books library directly (metadata + shelves + files)
+hugeblob ingest --source apple-books --limit 500   # re-run until done
 
-# Everything
+# Everything (readwise + apple-books)
 hugeblob ingest
 ```
+
+Apple Books is the primary source: hugeblob reads the app's own SQLite library
+to get each book's title/author/genre, its Collection ("shelf") names, and the
+real path to the EPUB/PDF file — no need to point at a folder. (Loose files
+outside Apple Books can still be indexed with `--source files --books-dir ...`.)
 
 ### 5. Use it
 
 ```bash
-# Search
+# Discover your Apple Books shelves
+hugeblob shelves
+
+# Search (optionally scoped to a shelf)
 hugeblob search "the role of narrative in understanding causality"
-hugeblob search "attention mechanisms" --author "Kahneman" --highlights
+hugeblob search "what can I braise?" --shelf "Food"
+hugeblob search "attention" --author "Kahneman" --highlights
 
 # Chat
 hugeblob chat
+hugeblob chat --shelf "Food"          # only your cookbooks
 hugeblob chat --book "Thinking, Fast and Slow"
 
 # Cross-book synthesis
-hugeblob synthesize "how do different authors approach the concept of emergence?"
+hugeblob synthesize "how do different authors approach emergence?"
+hugeblob synthesize "techniques for building flavor" --shelf "Food"
 
 # Library stats
 hugeblob stats
 ```
 
-## Multiple libraries (collections)
+## Shelves vs. collections
 
-Keep separate libraries fully isolated — e.g. cookbooks apart from everything
-else — using **collections**. Each collection is an independent index: queries
-never cross over, and each tracks its own ingestion state.
+Two different ways to slice your library — don't confuse them:
 
-Pass `--collection` (`-c`) to any command. For ingest, point `--books-dir` at
-that library's folder:
+- **Shelf** (`--shelf`) = an Apple Books *Collection* (the groupings in the
+  Books sidebar, like "Food"). Every book is tagged with its shelves at ingest,
+  so you can filter any query by shelf without a separate index.
+- **Collection** (`--collection` / `-c`) = a separate hugeblob/Qdrant *index*.
+  Fully isolated storage; queries never cross over; each tracks its own
+  ingestion state.
+
+For most cases, shelves are all you need — index everything once, filter by
+shelf at query time:
 
 ```bash
-# Build a cookbooks collection (no Readwise highlights — files only)
-hugeblob ingest -c cookbooks --source files --books-dir ~/Cookbooks --limit 500
+hugeblob ingest --source all                 # tags every book with its shelves
+hugeblob chat --shelf "Food"                 # only cookbooks
+hugeblob synthesize "flavor pairing" --shelf "Food"
+```
 
-# Build your main library (the default collection is "library")
-hugeblob ingest --source all --books-dir ~/Books --limit 500
+Use a separate **collection** when you want a shelf stored as its own isolated
+index (smaller, faster, never mixed):
+
+```bash
+# Ingest just the Food shelf into a dedicated "cookbooks" index
+hugeblob ingest --source apple-books --shelf "Food" -c cookbooks
+
+# Everything else into the default "library" index
+hugeblob ingest --source all
 
 # Query one or the other
-hugeblob search "what can I braise in a dutch oven?" -c cookbooks
 hugeblob chat -c cookbooks
 hugeblob chat                      # main library (default collection)
 hugeblob stats -c cookbooks
 ```
+
+The folder fallback still works for loose files outside Apple Books:
+
+```bash
+hugeblob ingest -c extras --source files --books-dir ~/LooseBooks --limit 500
+```
+
 
 Notes:
 - Collections are created on first ingest — no setup step needed.

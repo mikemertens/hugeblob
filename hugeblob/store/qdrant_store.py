@@ -57,6 +57,7 @@ class QdrantStore:
         author_filter: str | None = None,
         title_filter: str | None = None,
         genre_filter: str | None = None,
+        shelf_filter: str | None = None,
         min_rating: int | None = None,
     ) -> list[SearchResult]:
         must: list[Any] = []
@@ -69,6 +70,9 @@ class QdrantStore:
             must.append(FieldCondition(key="title", match=MatchValue(value=title_filter)))
         if genre_filter:
             must.append(FieldCondition(key="genre", match=MatchValue(value=genre_filter)))
+        if shelf_filter:
+            # `shelves` is an array payload; MatchValue matches any element.
+            must.append(FieldCondition(key="shelves", match=MatchValue(value=shelf_filter)))
         if min_rating is not None:
             from qdrant_client.models import Range
             must.append(FieldCondition(key="rating", range=Range(gte=min_rating)))
@@ -98,6 +102,7 @@ class QdrantStore:
                     file_path=p.get("file_path"),
                     highlight_note=p.get("highlight_note"),
                     readwise_url=p.get("readwise_url"),
+                    shelves=p.get("shelves", []) or [],
                 )
             )
         return results
@@ -114,7 +119,7 @@ class QdrantStore:
                 collection_name=self.collection,
                 limit=500,
                 offset=offset,
-                with_payload=["book_id", "title", "author", "genre", "rating", "source"],
+                with_payload=["book_id", "title", "author", "genre", "rating", "source", "shelves"],
             )
             for r in records:
                 p = r.payload or {}

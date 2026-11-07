@@ -41,6 +41,7 @@ def search_library(
     limit: int = 8,
     author: Optional[str] = None,
     genre: Optional[str] = None,
+    shelf: Optional[str] = None,
     min_rating: Optional[int] = None,
 ) -> str:
     """Semantic search across full book text and highlights in the library.
@@ -50,6 +51,7 @@ def search_library(
         limit: Max results to return (default 8).
         author: Filter to a specific author name.
         genre: Filter to a genre (e.g. "fiction", "science").
+        shelf: Filter to an Apple Books shelf/collection (e.g. "Food").
         min_rating: Minimum Apple Books star rating (1-5).
     """
     from hugeblob.query.search import search
@@ -57,7 +59,7 @@ def search_library(
     settings, embedder, store = _deps()
     results = search(
         query, store, embedder,
-        limit=limit, author=author, genre=genre, min_rating=min_rating,
+        limit=limit, author=author, genre=genre, shelf=shelf, min_rating=min_rating,
     )
 
     if not results:
@@ -106,7 +108,22 @@ def search_highlights(query: str, limit: int = 8) -> str:
 
 
 @mcp.tool()
-def synthesize_topic(topic: str, limit: int = 12) -> str:
+def list_shelves() -> str:
+    """List the Apple Books shelves (Collections) and how many books are on each.
+
+    Useful before filtering a search by shelf (e.g. to find the exact name of
+    the cooking/food shelf).
+    """
+    from hugeblob.ingest.apple_books import list_shelves as get_shelves
+
+    rows = get_shelves()
+    if not rows:
+        return "No Apple Books shelves found on this machine."
+    return "\n".join(f"{name} — {count} books" for name, count in rows)
+
+
+@mcp.tool()
+def synthesize_topic(topic: str, limit: int = 12, shelf: Optional[str] = None) -> str:
     """Cross-book synthesis: find patterns, themes, and connections on a topic.
 
     Gathers relevant passages from multiple books then uses Claude to synthesize
@@ -115,13 +132,14 @@ def synthesize_topic(topic: str, limit: int = 12) -> str:
     Args:
         topic: Topic or question to synthesize across the library.
         limit: Number of passages to gather before synthesis.
+        shelf: Restrict to an Apple Books shelf/collection (e.g. "Food").
     """
     import anthropic
     from hugeblob.query.search import search
     from hugeblob.query.llm import synthesize
 
     settings, embedder, store = _deps()
-    results = search(topic, store, embedder, limit=limit)
+    results = search(topic, store, embedder, limit=limit, shelf=shelf)
 
     if not results:
         return "No relevant passages found for this topic."

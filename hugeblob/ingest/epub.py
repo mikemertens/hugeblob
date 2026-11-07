@@ -56,6 +56,7 @@ def epub_to_chunks(
     genre = (metadata and metadata.genre) or ""
     rating = metadata.rating if metadata else None
     book_id = (metadata and metadata.book_id) or _book_id(path)
+    shelves = metadata.shelves if metadata else []
 
     raw_chunks = chunk_text(full_text, chunk_size, overlap)
     return [
@@ -69,6 +70,7 @@ def epub_to_chunks(
             text=chunk,
             chunk_index=i,
             file_path=str(path),
+            shelves=shelves,
         )
         for i, chunk in enumerate(raw_chunks)
     ]

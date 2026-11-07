@@ -50,11 +50,15 @@ def _get_deps(collection: Optional[str] = None):
 def ingest(
     source: str = typer.Option(
         "all", "--source", "-s",
-        help="What to ingest: all | readwise | files",
+        help="What to ingest: all | readwise | apple-books | files",
     ),
     books_dir: Optional[Path] = typer.Option(
         None, "--books-dir", "-d",
-        help="Override the BOOKS_DIR setting for this run.",
+        help="Override BOOKS_DIR for the 'files' folder-scan source.",
+    ),
+    shelf: Optional[str] = typer.Option(
+        None, "--shelf",
+        help="Only ingest books on this Apple Books shelf/collection (e.g. 'Food').",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Re-ingest already processed files."),
     limit: Optional[int] = typer.Option(
@@ -66,10 +70,22 @@ def ingest(
         help="Target collection (separate library). Defaults to QDRANT_COLLECTION.",
     ),
 ):
-    """Ingest your library into the vector store."""
+    """Ingest your library into the vector store.
+
+    Sources:
+      apple-books  read the Apple Books library directly (metadata + shelves + files)
+      files        scan a folder (BOOKS_DIR) for loose EPUB/PDFs (fallback)
+      readwise     sync Readwise highlights
+      all          readwise + apple-books
+    """
     from hugeblob.embed.embedder import embedder_from_settings
     from hugeblob.store.qdrant_store import store_from_settings
-    from hugeblob.ingest.pipeline import ingest_readwise, ingest_files
+    from hugeblob.ingest.pipeline import ingest_readwise, ingest_files, ingest_apple_books
+
+    valid = {"all", "readwise", "apple-books", "files"}
+    if source not in valid:
+        console.print(f"[red]Unknown source '{source}'.[/red] Choose from: {', '.join(sorted(valid))}")
+        raise typer.Exit(1)
 
     settings = _resolve_settings(collection)
     embedder = embedder_from_settings(settings)
@@ -81,8 +97,14 @@ def ingest(
     if source in ("all", "readwise"):
         ingest_readwise(settings, store, embedder, log=log)
 
-    if source in ("all", "files"):
-        ingest_files(settings, store, embedder, books_dir=books_dir, force=force, limit=limit, log=log)
+    if source in ("all", "apple-books"):
+        ingest_apple_books(settings, store, embedder, shelf=shelf, force=force, limit=limit, log=log)
+
+    if source == "files":
+        ingest_files(
+            settings, store, embedder,
+            books_dir=books_dir, force=force, limit=limit, shelf=shelf, log=log,
+        )
 
     console.print(f"\n[green]Done.[/green] Total indexed chunks: {store.count()}")
 
@@ -98,6 +120,7 @@ def search(
     highlights_only: bool = typer.Option(False, "--highlights", "-H", help="Only search highlights"),
     author: Optional[str] = typer.Option(None, "--author", "-a", help="Filter by author"),
     genre: Optional[str] = typer.Option(None, "--genre", "-g", help="Filter by genre"),
+    shelf: Optional[str] = typer.Option(None, "--shelf", help="Filter by Apple Books shelf (e.g. 'Food')"),
     min_rating: Optional[int] = typer.Option(None, "--min-rating", "-r", help="Minimum rating (1-5)"),
     collection: Optional[str] = typer.Option(
         None, "--collection", "-c", help="Collection to search. Defaults to QDRANT_COLLECTION.",
@@ -115,6 +138,7 @@ def search(
         highlights_only=highlights_only,
         author=author,
         genre=genre,
+        shelf=shelf,
         min_rating=min_rating,
     )
 
@@ -148,6 +172,7 @@ def search(
 def chat(
     book: Optional[str] = typer.Option(None, "--book", "-b", help="Focus chat on a specific book title."),
     highlights_only: bool = typer.Option(False, "--highlights", "-H", help="Pull from highlights only."),
+    shelf: Optional[str] = typer.Option(None, "--shelf", help="Restrict chat to an Apple Books shelf (e.g. 'Food')."),
     collection: Optional[str] = typer.Option(
         None, "--collection", "-c", help="Collection to chat with. Defaults to QDRANT_COLLECTION.",
     ),
@@ -190,6 +215,7 @@ def chat(
             limit=8,
             highlights_only=highlights_only,
             title=book,
+            shelf=shelf,
         )
 
         if not results:
@@ -218,6 +244,7 @@ def chat(
 def synthesize(
     topic: str = typer.Argument(..., help="Topic to synthesize across your library."),
     limit: int = typer.Option(12, "--limit", "-n", help="Number of passages to gather."),
+    shelf: Optional[str] = typer.Option(None, "--shelf", help="Restrict to an Apple Books shelf (e.g. 'Food')."),
     collection: Optional[str] = typer.Option(
         None, "--collection", "-c", help="Collection to synthesize from. Defaults to QDRANT_COLLECTION.",
     ),
@@ -229,7 +256,7 @@ def synthesize(
     settings, embedder, store, client = _get_deps(collection)
 
     console.print(f"[dim]Gathering passages about: {topic}...[/dim]")
-    results = do_search(topic, store, embedder, limit=limit)
+    results = do_search(topic, store, embedder, limit=limit, shelf=shelf)
 
     if not results:
         console.print("[yellow]No relevant passages found.[/yellow]")
@@ -278,6 +305,75 @@ def stats(
     table.add_row("Embedding provider", settings.embedding_provider)
     table.add_row("Claude model", settings.claude_model)
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# shelves
+# ---------------------------------------------------------------------------
+
+@app.command()
+def shelves():
+    """List the Apple Books shelves (Collections) found on this Mac."""
+    from hugeblob.ingest.apple_books import list_shelves as get_shelves
+
+    rows = get_shelves()
+    if not rows:
+        console.print(
+            "[yellow]No Apple Books shelves found.[/yellow]\n"
+            "[dim]Either Apple Books isn't on this machine, its library is in an "
+            "unrecognised location, or no user Collections exist. Run "
+            "`hugeblob doctor` to probe the library location.[/dim]"
+        )
+        raise typer.Exit()
+
+    table = Table(title="Apple Books shelves", border_style="dim")
+    table.add_column("Shelf", style="bold")
+    table.add_column("Books", justify="right")
+    for name, count in rows:
+        table.add_row(name, str(count))
+    console.print(table)
+    console.print("\n[dim]Use with:  hugeblob ingest --source apple-books --shelf \"<name>\"[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+@app.command()
+def doctor():
+    """Probe where the Apple Books library lives and what this tool can read."""
+    from hugeblob.ingest import apple_books as ab
+
+    console.print("[bold]Apple Books library probe[/bold]\n")
+
+    db = ab._find_library_db()
+    if db:
+        console.print(f"[green]SQLite library found:[/green] {db}")
+    else:
+        console.print(
+            f"[yellow]No SQLite library at[/yellow] {ab._IBOOKSX_BKLIBRARY}"
+        )
+
+    plist = next((c for c in ab._PLIST_CANDIDATES if c.exists()), None)
+    if plist:
+        console.print(f"[green]Legacy plist found:[/green] {plist}")
+
+    books = ab.load_apple_books()
+    with_files = [b for b in books if b.file_path]
+    console.print(f"\nBooks read: [bold]{len(books)}[/bold]")
+    console.print(f"With a resolvable file path: [bold]{len(with_files)}[/bold]")
+    shelf_rows = ab.list_shelves()
+    console.print(f"Shelves (Collections): [bold]{len(shelf_rows)}[/bold]")
+    if shelf_rows:
+        preview = ", ".join(f"{n} ({c})" for n, c in shelf_rows[:8])
+        console.print(f"[dim]{preview}[/dim]")
+
+    if not books:
+        console.print(
+            "\n[yellow]Nothing found.[/yellow] Your Apple Books data may be in a "
+            "different location. Please share the output of:\n"
+            "[dim]find ~/Library -iname '*.sqlite' 2>/dev/null | grep -iE 'book'[/dim]"
+        )
 
 
 # ---------------------------------------------------------------------------

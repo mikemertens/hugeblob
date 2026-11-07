@@ -18,6 +18,7 @@ class BookMetadata(BaseModel):
     description: str = ""
     rating: Optional[int] = None
     tags: list[str] = Field(default_factory=list)
+    shelves: list[str] = Field(default_factory=list)
     file_path: Optional[str] = None
     isbn: Optional[str] = None
     publisher: Optional[str] = None
@@ -33,6 +34,7 @@ class TextChunk(BaseModel):
     source: DocSource
     text: str
     chunk_index: int = 0
+    shelves: list[str] = Field(default_factory=list)
     page_number: Optional[int] = None
     file_path: Optional[str] = None
     # highlight-specific
@@ -53,6 +55,7 @@ class SearchResult(BaseModel):
     file_path: Optional[str] = None
     highlight_note: Optional[str] = None
     readwise_url: Optional[str] = None
+    shelves: list[str] = Field(default_factory=list)
 
     def format(self) -> str:
         lines = [f"[{self.source.value}] {self.title} — {self.author}  (score: {self.score:.3f})"]

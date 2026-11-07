@@ -16,6 +16,7 @@ def search(
     author: str | None = None,
     title: str | None = None,
     genre: str | None = None,
+    shelf: str | None = None,
     min_rating: int | None = None,
 ) -> list[SearchResult]:
     source_filter: DocSource | None = None
@@ -32,5 +33,6 @@ def search(
         author_filter=author,
         title_filter=title,
         genre_filter=genre,
+        shelf_filter=shelf,
         min_rating=min_rating,
     )

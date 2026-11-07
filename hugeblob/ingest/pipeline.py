@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from hugeblob.config import Settings
 from hugeblob.models import BookMetadata, TextChunk
-from hugeblob.ingest.apple_books import load_apple_books_metadata
+from hugeblob.ingest.apple_books import load_apple_books, load_apple_books_metadata
 from hugeblob.ingest.readwise import fetch_highlights
 from hugeblob.ingest.epub import epub_to_chunks
 from hugeblob.ingest.pdf import pdf_to_chunks
@@ -36,6 +36,100 @@ def _build_metadata_index(books: list[BookMetadata]) -> dict[str, BookMetadata]:
         if b.file_path:
             index[Path(b.file_path).stem.lower()] = b
     return index
+
+
+def _extract_chunks(
+    path: Path, metadata: BookMetadata | None, settings: Settings
+) -> list[TextChunk]:
+    if path.suffix.lower() == ".epub":
+        return epub_to_chunks(path, metadata, settings.chunk_size, settings.chunk_overlap)
+    return pdf_to_chunks(path, metadata, settings.chunk_size, settings.chunk_overlap)
+
+
+def _has_shelf(book: BookMetadata, shelf: str) -> bool:
+    target = shelf.strip().lower()
+    return any(s.strip().lower() == target for s in book.shelves)
+
+
+def ingest_apple_books(
+    settings: Settings,
+    store: "QdrantStore",  # noqa: F821
+    embedder: "Embedder",  # noqa: F821
+    shelf: str | None = None,
+    force: bool = False,
+    limit: int | None = None,
+    log: Callable[[str], None] = print,
+) -> int:
+    """Ingest straight from the Apple Books library, using its own file paths.
+
+    Each book is tagged with its Collection ("shelf") names. Pass `shelf` to
+    ingest only the books on a given shelf (e.g. "Food").
+    """
+    settings.ensure_data_dir()
+    state = _load_state(settings.state_file)
+    ingested = state.get("ingested_files", {})
+
+    books = load_apple_books()
+    if not books:
+        log("No Apple Books library found (no SQLite DB or plist).")
+        return 0
+
+    # Keep only books with a resolvable EPUB/PDF file.
+    usable = [
+        (b, Path(b.file_path))
+        for b in books
+        if b.file_path and Path(b.file_path).suffix.lower() in (".epub", ".pdf")
+    ]
+
+    if shelf:
+        usable = [(b, p) for (b, p) in usable if _has_shelf(b, shelf)]
+
+    log(
+        f"Apple Books: {len(usable)} books"
+        + (f" on shelf '{shelf}'" if shelf else "")
+        + f" ({len(books)} entries in library)"
+    )
+
+    # Determine which are new/changed and which are missing (iCloud placeholders).
+    pending: list[tuple[BookMetadata, Path]] = []
+    missing = 0
+    for b, p in usable:
+        if not p.exists():
+            missing += 1
+            continue
+        mtime = str(p.stat().st_mtime)
+        if force or str(p) not in ingested or ingested[str(p)].get("mtime") != mtime:
+            pending.append((b, p))
+    if missing:
+        log(f"  {missing} books are iCloud placeholders not downloaded locally — skipped.")
+
+    total_remaining = len(pending)
+    if limit is not None:
+        pending = pending[:limit]
+
+    total_new = 0
+    for b, p in tqdm(pending, desc="Indexing Apple Books", unit="book"):
+        try:
+            chunks = _extract_chunks(p, b, settings)
+        except Exception as e:
+            log(f"  Error extracting {p.name}: {e}")
+            continue
+        if not chunks:
+            continue
+
+        _upsert_chunks(chunks, store, embedder, batch_size=100)
+        ingested[str(p)] = {"mtime": str(p.stat().st_mtime), "chunk_count": len(chunks), "title": b.title}
+        state["total_chunks"] = state.get("total_chunks", 0) + len(chunks)
+        total_new += 1
+
+    state["ingested_files"] = ingested
+    _save_state(settings.state_file, state)
+
+    msg = f"Ingested {total_new} books from Apple Books."
+    if limit is not None and total_remaining - total_new > 0:
+        msg += f" {total_remaining - total_new} remaining — run again to continue."
+    log(msg)
+    return total_new
 
 
 def ingest_readwise(
@@ -79,6 +173,7 @@ def ingest_files(
     books_dir: Path | None = None,
     force: bool = False,
     limit: int | None = None,
+    shelf: str | None = None,
     log: Callable[[str], None] = print,
 ) -> int:
     directory = (books_dir or settings.books_dir).expanduser()
@@ -106,6 +201,15 @@ def ingest_files(
         or ingested[str(p)].get("mtime") != str(p.stat().st_mtime)
     ]
 
+    # A shelf filter here is best-effort: folder files are matched to Apple
+    # Books metadata by filename, so a file with no match (unknown shelf) is
+    # skipped when a shelf is requested.
+    if shelf:
+        pending = [
+            p for p in pending
+            if (m := meta_index.get(p.stem.lower())) is not None and _has_shelf(m, shelf)
+        ]
+
     total_remaining = len(pending)
     if limit is not None:
         pending = pending[:limit]
@@ -113,6 +217,7 @@ def ingest_files(
     log(
         f"Found {len(all_files)} files in {directory} "
         f"({total_remaining} unprocessed"
+        + (f" on shelf '{shelf}'" if shelf else "")
         + (f", processing next {len(pending)}" if limit is not None else "")
         + ")"
     )
@@ -125,10 +230,7 @@ def ingest_files(
         metadata = meta_index.get(path.stem.lower())
 
         try:
-            if path.suffix.lower() == ".epub":
-                chunks = epub_to_chunks(path, metadata, settings.chunk_size, settings.chunk_overlap)
-            else:
-                chunks = pdf_to_chunks(path, metadata, settings.chunk_size, settings.chunk_overlap)
+            chunks = _extract_chunks(path, metadata, settings)
         except Exception as e:
             log(f"  Error extracting {path.name}: {e}")
             continue

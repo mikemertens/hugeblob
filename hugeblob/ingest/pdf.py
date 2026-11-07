@@ -37,6 +37,7 @@ def pdf_to_chunks(
     genre = (metadata and metadata.genre) or ""
     rating = metadata.rating if metadata else None
     book_id = (metadata and metadata.book_id) or _book_id(path)
+    shelves = metadata.shelves if metadata else []
 
     chunks: list[TextChunk] = []
     chunk_index = 0
@@ -55,6 +56,7 @@ def pdf_to_chunks(
                     chunk_index=chunk_index,
                     page_number=page_num,
                     file_path=str(path),
+                    shelves=shelves,
                 )
             )
             chunk_index += 1
